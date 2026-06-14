@@ -1,0 +1,146 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from skimage.measure import find_contours
+
+# ============================================================
+# 1. МАТЕМАТИЧЕСКАЯ МОДЕЛЬ И РАСЧЕТ ПОЛЯ
+# ============================================================
+def potential(q, x0, y0, X, Y):
+    """Расчет потенциала точечного заряда с регуляризацией от деления на 0."""
+    R = np.sqrt((X - x0)**2 + (Y - y0)**2)
+    return q / (R + 0.01)
+
+# Создание регулярной сетки 100х100
+GRID_RES = 100
+x_range = np.linspace(-2, 2, GRID_RES)
+y_range = np.linspace(-2, 2, GRID_RES)
+X, Y = np.meshgrid(x_range, y_range)
+
+# Моделирование электрического диполя (q1 = +1 в (-0.5, 0); q2 = -1 в (0.5, 0))
+phi = potential(1, -0.5, 0, X, Y) + potential(-1, 0.5, 0, X, Y)
+
+# Набор уровней изолиний для отрисовки
+levels = [-2.0, -1.0, -0.5, -0.2, 0.0, 0.2, 0.5, 1.0, 2.0]
+
+# ============================================================
+# 2. СОБСТВЕННАЯ РЕАЛИЗАЦИЯ MARCHING SQUARES
+# ============================================================
+def custom_marching_squares(Z, level, x_coords, y_coords):
+    """
+    Самостоятельная базовая реализация алгоритма Marching Squares.
+    Возвращает список изолинейных отрезков [(x1, y1, x2, y2), ...]
+    """
+    nx, ny = Z.shape
+    segments = []
+    
+    def interpolate(p1, p2, v1, v2):
+        if abs(v1 - v2) < 1e-10:
+            t = 0.5
+        else:
+            t = (level - v1) / (v2 - v1)
+        return (p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1]))
+
+    for i in range(nx - 1):
+        for j in range(ny - 1):
+            # Координаты вершин ячейки
+            p00 = (x_coords[j], y_coords[i])
+            p10 = (x_coords[j+1], y_coords[i])
+            p01 = (x_coords[j], y_coords[i+1])
+            p11 = (x_coords[j+1], y_coords[i+1])
+            
+            # Значения потенциала в вершинах
+            v00, v10 = Z[i, j], Z[i, j+1]
+            v01, v11 = Z[i+1, j], Z[i+1, j+1]
+            
+            # Битовая маска ячейки
+            mask = 0
+            if v00 >= level: mask |= 1
+            if v10 >= level: mask |= 2
+            if v11 >= level: mask |= 4
+            if v01 >= level: mask |= 8
+            
+            # Определение точек на ребрах через интерполяцию
+            e_bottom = interpolate(p00, p10, v00, v10)
+            e_right  = interpolate(p10, p11, v10, v11)
+            e_top    = interpolate(p01, p11, v01, v11)
+            e_left   = interpolate(p00, p01, v00, v01)
+            
+            # Генерация сегментов на основе топологического случая
+            if mask in [1, 14]:
+                segments.append((*e_left, *e_bottom))
+            elif mask in [2, 13]:
+                segments.append((*e_bottom, *e_right))
+            elif mask in [4, 11]:
+                segments.append((*e_top, *e_right))
+            elif mask in [8, 7]:
+                segments.append((*e_left, *e_top))
+            elif mask in [3, 12]:
+                segments.append((*e_left, *e_right))
+            elif mask in [6, 9]:
+                segments.append((*e_bottom, *e_top))
+            elif mask in [5]:  # Неоднозначность (Случай 4)
+                segments.append((*e_left, *e_top))
+                segments.append((*e_bottom, *e_right))
+            elif mask in [10]: # Неоднозначность (Случай 4)
+                segments.append((*e_left, *e_bottom))
+                segments.append((*e_top, *e_right))
+                
+    return segments
+
+# ============================================================
+# 3. ПОСТРОЕНИЕ СРАВНИТЕЛЬНЫХ ГРАФИКОВ В ОДНОМ ОКНЕ
+# ============================================================
+fig, axs = plt.subplots(2, 2, figsize=(12, 11))
+
+# --- График 1: Тепловая карта (Heatmap) ---
+im1 = axs[0, 0].imshow(phi, extent=[-2, 2, -2, 2], origin='lower', cmap='coolwarm', vmin=-3, vmax=3)
+fig.colorbar(im1, ax=axs[0, 0], label='Потенциал φ')
+axs[0, 0].set_title('1. Тепловая карта поля диполя')
+axs[0, 0].set_xlabel('x')
+axs[0, 0].set_ylabel('y')
+
+# --- График 2: 3D-поверхность ---
+# Переинициализируем ax под 3D представление
+fig.delaxes(axs[0, 1])
+ax_3d = fig.add_subplot(2, 2, 2, projection='3d')
+surf = ax_3d.plot_surface(X, Y, phi, cmap='coolwarm', alpha=0.8, linewidth=0, antialiased=True)
+ax_3d.set_zlim(-5, 5)
+ax_3d.set_title('2. 3D Поверхность потенциала')
+ax_3d.set_xlabel('x')
+ax_3d.set_ylabel('y')
+ax_3d.set_zlabel('φ')
+
+# --- График 3: Собственная реализация Marching Squares ---
+axs[1, 0].set_facecolor('#f0f0f0')
+for lvl in levels:
+    segms = custom_marching_squares(phi, lvl, x_range, y_range)
+    for x1, y1, x2, y2 in segms:
+        axs[1, 0].plot([x1, x2], [y1, y2], color='blue', linewidth=1.2)
+axs[1, 0].set_xlim(-2, 2)
+axs[1, 0].set_ylim(-2, 2)
+axs[1, 0].set_title('3. Изолинии (Собственный алгоритм)')
+axs[1, 0].set_xlabel('x')
+axs[1, 0].set_ylabel('y')
+axs[1, 0].grid(True, linestyle='--', alpha=0.5)
+
+# --- График 4: Встроенный find_contours (scikit-image) ---
+axs[1, 1].set_facecolor('#f0f0f0')
+for lvl in levels:
+    # find_contours работает в индексах матрицы
+    built_in_contours = find_contours(phi, lvl)
+    
+    for contour in built_in_contours:
+        # Перевод локальных индексов матрицы в физические координаты [-2, 2]
+        contour_x = -2.0 + (contour[:, 1] / (GRID_RES - 1)) * 4.0
+        contour_y = -2.0 + (contour[:, 0] / (GRID_RES - 1)) * 4.0
+        axs[1, 1].plot(contour_x, contour_y, color='red', linewidth=1.2)
+        
+axs[1, 1].set_xlim(-2, 2)
+axs[1, 1].set_ylim(-2, 2)
+axs[1, 1].set_title('4. Изолинии (Встроенный find_contours)')
+axs[1, 1].set_xlabel('x')
+axs[1, 1].set_ylabel('y')
+axs[1, 1].grid(True, linestyle='--', alpha=0.5)
+
+plt.tight_layout()
+plt.show()
